@@ -1,10 +1,7 @@
 ﻿using System.Text;
 using System.Diagnostics;
 using Codeer.Friendly.Windows;
-using Codeer.Friendly.Dynamic;
 using Codeer.Friendly.Windows.Grasp;
-using AI.Talk.Core;
-using NAudio.Wave;
 using RM.Friendly.WPFStandardControls;
 using Newtonsoft.Json;
 using System.Windows.Automation;
@@ -16,7 +13,7 @@ namespace Yukarisan
     {
         private readonly string baseUrl;
         private readonly HttpClient httpClient;
-        private string TOKEN;
+        private string TOKEN = String.Empty;
 
         public SlackAPIHttpClient(string baseUrl)
         {
@@ -29,7 +26,7 @@ namespace Yukarisan
         {
             var xmlDoc = new XmlDocument();
             xmlDoc.Load(@"SlackToken.xml");
-            var xmlToken = xmlDoc.SelectSingleNode("token/value").InnerText;
+            var xmlToken = xmlDoc.SelectSingleNode("slack/token/value").InnerText;
             TOKEN = xmlToken;
         }
 
@@ -127,7 +124,7 @@ namespace Yukarisan
         {
             public string Title { get; set; } = string.Empty;
             public string Title_Link { get; set; } = string.Empty;
-            public string Text { get;set; } = string.Empty;
+            public string Text { get; set; } = string.Empty;
         }
         static void Main(string[] args)
         {
@@ -139,44 +136,7 @@ namespace Yukarisan
             }
             Process yukarisan = aivoiceProcess[0];
 
-            //UIAutomation(yukarisan);
-            //Program.FromGUI(yukarisan, "こんにちは");
-
             ReadRssMessageViaSlack(yukarisan);
-            //Program.FromAPI(app);
-        }
-
-        static void UIAutomation(Process proc)
-        {
-            AutomationElement elem = AutomationElement.FromHandle(proc.MainWindowHandle);
-            var hoge = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
-            if (hoge == null) return;
-
-            Console.WriteLine(hoge.Current.Name);
-
-            var tab = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "TextEditView"));
-            if(tab == null) return;
-
-            var tabControl = tab.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "TabControl"));
-            if( tabControl == null) return;
-
-            var rawWalker = TreeWalker.RawViewWalker;
-            Queue<AutomationElement> queue = new Queue<AutomationElement>();
-            queue.Enqueue(tab);
-            while(queue.Count > 0)
-            {
-                var q = queue.Dequeue();
-                Console.WriteLine(String.Format("{0}{1}: {2}", new String('-', (int)(queue.Count*2)), q.Current.ClassName, q.Current.Name));
-
-                var sibling = rawWalker.GetNextSibling(q);
-                if(sibling != null) queue.Enqueue(sibling);
-
-                var qchild = rawWalker.GetFirstChild(q);
-                if(qchild != null) queue.Enqueue(qchild);
-            }
-
-            var textbox = tab.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "TextBox"));
-            if(textbox == null) return;
         }
 
         static void ReadRssMessageViaSlack(Process proc)
@@ -202,7 +162,7 @@ namespace Yukarisan
 
                     AutomationElement elem = AutomationElement.FromHandle(proc.MainWindowHandle);
                     var status = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
-                    if(status == null)
+                    if (status == null)
                     {
                         Console.WriteLine("Could not detect status bar text. Sleep 10 sec.");
                         Thread.Sleep(10000);
@@ -214,57 +174,13 @@ namespace Yukarisan
                     while (!status.Current.Name.Equals("テキストの読み上げは完了しました。"))
                     {
                         Console.CursorLeft = 0;
-                        Console.Write("Now Yukarisan reading " + bars[count%4]);
+                        Console.Write("Now Yukarisan reading " + bars[count % 4]);
                         Thread.Sleep(100);
                         count++;
                     }
                 }
                 Console.WriteLine("\n+++++++++++++");
             }
-        }
-
-        static void FromAPI(WindowsAppFriend app)
-        {
-            WindowsAppExpander.LoadAssembly(app, typeof(Program).Assembly);
-            dynamic injected_program = app.Type(typeof(Program));
-
-            string kana = "<S>ア^フリカオーリツガ!クイン<F>";
-            //kana = injected_program.TextToKana("こんにちは");
-            if (kana == String.Empty)
-            {
-                Console.WriteLine("Failed to TextToKana()");
-                return;
-            }
-
-            short[] rawBuf;
-            rawBuf = injected_program.TextToSpeech(kana);
-            if (rawBuf.Length == 0)
-            {
-                Console.WriteLine("Failed to TextToSpeec()");
-                return;
-            }
-
-            byte[] pcm_bytes = new byte[rawBuf.Length * 2];
-            for (int i = 0; i < rawBuf.Length; i++)
-            {
-                byte[] b = BitConverter.GetBytes(rawBuf[i]);
-                pcm_bytes[i * 2] = b[0];
-                pcm_bytes[i * 2 + 1] = b[1];
-            }
-            MemoryStream ms = new MemoryStream();
-            ms.Write(pcm_bytes, 0, pcm_bytes.Length);
-            ms.Position = 0;
-
-            var wave_stream = new RawSourceWaveStream(ms, new WaveFormat(44100, 16, 1));
-            var wave_out = new WaveOutEvent();
-            wave_out.Init(wave_stream);
-            wave_out.Play();
-            while (wave_out.PlaybackState == PlaybackState.Playing)
-            {
-                Thread.Sleep(100);
-            }
-            wave_out.Dispose();
-
         }
 
         static void FromGUI(WindowsAppFriend app, string text)
@@ -284,87 +200,6 @@ namespace Yukarisan
             // テキストを入力し、再生する
             talk_text_box.EmulateChangeText(text);
             play_button.EmulateClick();
-        }
-
-        static string TextToKana(string text)
-        {
-            AITalkResultCode resultCode;
-            AITalk_TJobParam jobParam;
-            jobParam.modeInOut = AITalkJobInOut.AITALKIOMODE_PLAIN_TO_AIKANA;
-            jobParam.userData = IntPtr.Zero;            
-
-            int jobId;
-            resultCode = AITalkAPI.TextToKana(out jobId, ref jobParam, text);
-            if(resultCode != AITalkResultCode.AITALKERR_SUCCESS)
-            {
-                Console.WriteLine("TextToKana() returned: " + resultCode);
-                return String.Empty;
-            }
-            Console.WriteLine($"Job ID: {jobId}");
-
-            StringBuilder sb = new StringBuilder(0x100);
-            uint size, pos;
-            resultCode = AITalkAPI.GetKana(jobId, sb, (uint)sb.Capacity, out size, out pos);
-            string kana = sb.ToString();
-            if(resultCode != AITalkResultCode.AITALKERR_SUCCESS)
-            {
-                Console.WriteLine("GetKana() returned: " + resultCode);
-                return String.Empty;
-            }
-
-            resultCode = AITalkAPI.CloseKana(jobId);
-            if(resultCode != AITalkResultCode.AITALKERR_SUCCESS)
-            {
-                Console.WriteLine("CloseKana() returned" + resultCode);
-                return String.Empty;
-            }
-
-            return kana;
-        }
-
-        static short[] TextToSpeech(string text)
-        {
-            AITalk_TJobParam jobParam;
-            jobParam.modeInOut = AITalkJobInOut.AITALKIOMODE_AIKANA_TO_WAVE;
-            jobParam.userData = IntPtr.Zero;
-
-            int jobId;
-            AITalkResultCode resultCode = AITalkAPI.TextToSpeech(out jobId, ref jobParam, text);
-            if(resultCode != AITalkResultCode.AITALKERR_SUCCESS)
-            {
-                Console.WriteLine("TextToSpeec() returned" + resultCode);
-                return new short[0];
-            }
-
-            AITalkStatusCode status;
-            do
-            {
-                Thread.Sleep(1);
-                AITalkAPI.GetStatus(jobId, out status);
-            } while ((status == AITalkStatusCode.AITALKSTAT_INPROGRESS) || (status == AITalkStatusCode.AITALKSTAT_STILL_RUNNING));
-            if(status != AITalkStatusCode.AITALKSTAT_DONE)
-            {
-                Console.WriteLine($"{status.ToString()}", "AITalkStatus is wrong state.");
-                return new short[0];
-            }
-
-            short[] rawBuf = new short[0x2B110];
-            uint size;
-            resultCode = AITalkAPI.GetData(jobId, rawBuf, 0x2B110, out size);
-            if(resultCode != AITalkResultCode.AITALKERR_SUCCESS)
-            {
-                Console.WriteLine("GetKana() returned" + resultCode);
-                return new short[0];
-            }
-
-            resultCode = AITalkAPI.CloseSpeech(jobId);
-            if(resultCode != AITalkResultCode.AITALKERR_SUCCESS)
-            {
-                Console.WriteLine("CloseSpeec() returned" + resultCode);
-                return new short[0];
-            }
-            Array.Resize<short>(ref rawBuf, (int)size);
-            return rawBuf;
         }
     }
 }
