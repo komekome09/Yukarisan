@@ -6,9 +6,102 @@ using RM.Friendly.WPFStandardControls;
 using Newtonsoft.Json;
 using System.Windows.Automation;
 using System.Xml;
+using System.Text.RegularExpressions;
 
 namespace Yukarisan
 {
+    class GoogleCloudTranslationClient
+    {
+        private readonly string baseUrl = "https://translation.googleapis.com/language/translate/v2?";
+        private readonly HttpClient httpClient;
+        private string TOKEN = string.Empty;
+
+        public GoogleCloudTranslationClient()
+        {
+            this.httpClient = new HttpClient();
+            GetTokenFromXml();
+        }
+        private void GetTokenFromXml()
+        {
+            var xmlDoc = new XmlDocument();
+            xmlDoc.Load(@"SlackToken.xml");
+            var xmlToken = xmlDoc.SelectSingleNode("root/google/translate/key").InnerText;
+            TOKEN = xmlToken;
+        }
+
+        public string GetTranslation(string text)
+        {
+            var request = baseUrl + $"key={TOKEN}&q={text}&detectedSourceLanguage=en&target=ja";
+            var response = PostMethod(request);
+            if (response == null)
+            {
+                Console.WriteLine("Failed to get request");
+                return string.Empty;
+            }
+
+            var resStatus = response.StatusCode;
+            var resBody = response.Content.ReadAsStringAsync().Result;
+            if (!resStatus.Equals(System.Net.HttpStatusCode.OK))
+            {
+                Console.WriteLine(resStatus.ToString());
+                return String.Empty;
+            }
+            if (string.IsNullOrEmpty(resBody))
+            {
+                Console.WriteLine("Response body is empty.");
+                return string.Empty;
+            }
+
+            return ExtractTranslatedString(resBody);
+        }
+
+        private HttpRequestMessage CreateRequest(HttpMethod httpMethod, string requestEndPoint)
+        {
+            var request = new HttpRequestMessage(httpMethod, requestEndPoint);
+            return request;
+        }
+
+        private HttpResponseMessage PostMethod(string endPoint)
+        {
+            HttpRequestMessage request = this.CreateRequest(HttpMethod.Post, endPoint);
+
+            Task<HttpResponseMessage> response;
+            try
+            {
+                response = httpClient.SendAsync(request);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine(ex.Message);
+                return null;
+            }
+
+            return response.Result;
+        }
+        private string ExtractTranslatedString(string json)
+        {
+            var messageObjects = JsonConvert.DeserializeObject<ResultObject>(json);
+            if(messageObjects.Data.Translations.Count == 0)
+            {
+                return String.Empty;
+            }
+
+            return messageObjects.Data.Translations.First().TranslatedText;
+        }
+        public class ResultObject
+        {
+            public Data Data { get; set; } = new Data();
+        }
+        public class Data
+        {
+            public List<Translate> Translations { get; set; } = new List<Translate>();
+        }
+        public class Translate
+        {
+            public string TranslatedText { get; set; } = string.Empty;
+            public string DetectedSourceLanguage { get; set; } = string.Empty;
+        }
+    }
     class SlackAPIHttpClient
     {
         private readonly string baseUrl;
@@ -26,7 +119,7 @@ namespace Yukarisan
         {
             var xmlDoc = new XmlDocument();
             xmlDoc.Load(@"SlackToken.xml");
-            var xmlToken = xmlDoc.SelectSingleNode("slack/token/value").InnerText;
+            var xmlToken = xmlDoc.SelectSingleNode("root/slack/token/value").InnerText;
             TOKEN = xmlToken;
         }
 
@@ -44,25 +137,37 @@ namespace Yukarisan
             return request;
         }
 
-        public string GetChannelList()
+        private HttpResponseMessage GetMethod(string endPoint)
         {
-            string requestEndPoint = this.baseUrl + "/conversations.list";
-            HttpRequestMessage request = this.CreateRequest(HttpMethod.Get, requestEndPoint);
+            HttpRequestMessage request = this.CreateRequest(HttpMethod.Get, endPoint);
 
-            string resBody;
-            System.Net.HttpStatusCode resStatus = System.Net.HttpStatusCode.NotFound;
             Task<HttpResponseMessage> response;
             try
             {
                 response = httpClient.SendAsync(request);
-                resBody = response.Result.Content.ReadAsStringAsync().Result;
-                resStatus = response.Result.StatusCode;
-            }catch (Exception ex)
+            }
+            catch (Exception ex)
             {
                 Console.WriteLine(ex.Message);
-                return String.Empty;
+                return null;
             }
 
+            return response.Result;
+        }
+
+        public string GetChannelList()
+        {
+            string requestEndPoint = this.baseUrl + "/conversations.list";
+            
+            var response = GetMethod(requestEndPoint);
+            if(response == null)
+            {
+                Console.WriteLine("Failed to get request");
+                return string.Empty;
+            }
+
+            var resStatus = response.StatusCode;
+            var resBody = response.Content.ReadAsStringAsync().Result;
             if (!resStatus.Equals(System.Net.HttpStatusCode.OK))
             {
                 Console.WriteLine(resStatus.ToString());
@@ -79,23 +184,16 @@ namespace Yukarisan
         public string GetChannelHistory(string channelId)
         {
             string requestEndPoint = this.baseUrl + "/conversations.history?channel=" + channelId;
-            HttpRequestMessage request = this.CreateRequest(HttpMethod.Get, requestEndPoint);
 
-            string resBody;
-            System.Net.HttpStatusCode resStatus = System.Net.HttpStatusCode.NotFound;
-            Task<HttpResponseMessage> response;
-            try
+            var response = GetMethod(requestEndPoint);
+            if (response == null)
             {
-                response = httpClient.SendAsync(request);
-                resBody = response.Result.Content.ReadAsStringAsync().Result;
-                resStatus = response.Result.StatusCode;
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex.Message);
-                return String.Empty;
+                Console.WriteLine("Failed to get request");
+                return string.Empty;
             }
 
+            var resStatus = response.StatusCode;
+            var resBody = response.Content.ReadAsStringAsync().Result;
             if (!resStatus.Equals(System.Net.HttpStatusCode.OK))
             {
                 Console.WriteLine(resStatus.ToString());
@@ -118,6 +216,7 @@ namespace Yukarisan
         public class Message
         {
             public string UserName { get; set; } = string.Empty;
+            public string Text { get; set; } = string.Empty;
             public List<Attachments> Attachments { get; set; } = new List<Attachments>();
         }
         public class Attachments
@@ -139,45 +238,83 @@ namespace Yukarisan
             ReadRssMessageViaSlack(yukarisan);
         }
 
+        static bool isEnglish(string text)
+        {
+            return !Regex.IsMatch(text, @"[\p{IsHiragana}\p{IsKatakana}\p{IsCJKUnifiedIdeographs}]+");
+        }
+
         static void ReadRssMessageViaSlack(Process proc)
         {
             WindowsAppFriend app = new WindowsAppFriend(proc);
 
             const string baseUrl = "https://slack.com/api";
-            const string RSS_VEHICLE = "C018Z1JLM7V";
+            const string RSS_VEHICLE = "CCGBY78KA";
+
             var slackClient = new SlackAPIHttpClient(baseUrl);
             var responseBody = slackClient.GetChannelHistory(RSS_VEHICLE);
-            //Console.WriteLine(channelList);
+            var translate = new GoogleCloudTranslationClient();
 
-            var messageObjects = JsonConvert.DeserializeObject<Messages>(responseBody);
+            string regexLink = @"<(?<URL>https?.*?)\|(?<Title>.*?)>";
+            Regex regex = new Regex(string.Format(@"^{0}(?<Text>.*)", regexLink), RegexOptions.Singleline);
+
+            AutomationElement elem = AutomationElement.FromHandle(proc.MainWindowHandle);
+
+            var messageObjects = JsonConvert.DeserializeObject<Messages>(responseBody);           
             foreach (var messageObject in messageObjects.messages)
             {
                 Console.WriteLine(messageObject.UserName);
-                foreach (var attachment in messageObject.Attachments)
+
+                var targetText = messageObject.Text.Replace("\r", "").Replace("\n", "");
+                var textMatch = regex.Match(targetText);
+                if (textMatch.Success)
                 {
-                    Console.WriteLine(attachment.Title);
-                    Console.WriteLine(attachment.Title_Link);
-                    Console.WriteLine(attachment.Text);
-                    Program.FromGUI(app, attachment.Text);
+                    string url = textMatch.Groups["URL"].Value.ToString();
+                    string title = textMatch.Groups["Title"].Value.ToString();
+                    string text = textMatch.Groups["Text"].Value.ToString();
+                    text = Regex.Replace(text, regexLink, "");
 
-                    AutomationElement elem = AutomationElement.FromHandle(proc.MainWindowHandle);
-                    var status = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
-                    if (status == null)
+                    if (text == String.Empty)
                     {
-                        Console.WriteLine("Could not detect status bar text. Sleep 10 sec.");
-                        Thread.Sleep(10000);
-                        continue;
+                        text = messageObject.Attachments.FirstOrDefault().Text;
                     }
 
-                    uint count = 0;
-                    char[] bars = { '/', '-', '\\', '|' };
-                    while (!status.Current.Name.Equals("テキストの読み上げは完了しました。"))
+                    Console.WriteLine(title);
+                    Console.WriteLine(url);
+                    Console.WriteLine(text);
+
+                    foreach(var v in new Dictionary<string, string> { {"title", title }, { "content", text } })
                     {
-                        Console.CursorLeft = 0;
-                        Console.Write("Now Yukarisan reading " + bars[count % 4]);
-                        Thread.Sleep(100);
-                        count++;
+                        string str = v.Value;
+                        if (isEnglish(v.Value))
+                        {
+                            var translated = translate.GetTranslation(v.Value);
+                            str = translated;
+                        }
+                        if (v.Key == "title")
+                        {
+                            str = "タイトル: " + str;
+                        }
+                        Program.FromGUI(app, str);
+
+                        var status = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
+                        if (status == null)
+                        {
+                            Console.WriteLine("Could not detect status bar text. Sleep 10 sec.");
+                            Thread.Sleep(10000);
+                            continue;
+                        }
+
+                        uint count = 0;
+                        char[] bars = { '/', '-', '\\', '|' };
+                        while (!status.Current.Name.Equals("テキストの読み上げは完了しました。"))
+                        {
+                            Console.CursorLeft = 0;
+                            Console.Write("Now Yukarisan reading " + bars[count % 4]);
+                            Thread.Sleep(100);
+                            count++;
+                        }
                     }
+
                 }
                 Console.WriteLine("\n+++++++++++++");
             }
@@ -187,19 +324,18 @@ namespace Yukarisan
         {
             var topLevel = app.GetTopLevelWindows();
             var editview = topLevel.Single().GetFromTypeFullName("AI.Talk.Editor.TextEditView");
+
+            // Detect TextBox and edit text.
             var textbox = editview.Single().LogicalTree().ByType<System.Windows.Controls.TextBox>();
             var talkTextBox = new WPFTextBox(textbox.Single());
-            talkTextBox.EmulateChangeText("あいうえo");
+            talkTextBox.EmulateChangeText(text);
 
-            // テキスト入力欄と再生ボタンを特定する
-            WindowControl ui_tree_top = WindowControl.FromZTop(app);
-            var text_edit_view = ui_tree_top.GetFromTypeFullName("AI.Talk.Editor.TextEditView")[0].LogicalTree();
-            WPFTextBox talk_text_box = new WPFTextBox(text_edit_view[7]);
-            WPFButtonBase play_button = new WPFButtonBase(text_edit_view[9]);
+            // Detect "Play" button and emulate click.
+            // NOTE: In detection, below code suppose first button element is "Play" button. 
+            var button = editview.Single().VisualTree().ByType<System.Windows.Controls.Button>();
+            var talkPlayButton = new WPFButtonBase(button.First());
+            talkPlayButton.EmulateClick();
 
-            // テキストを入力し、再生する
-            talk_text_box.EmulateChangeText(text);
-            play_button.EmulateClick();
         }
     }
 }
