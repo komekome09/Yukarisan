@@ -225,13 +225,48 @@ namespace Yukarisan
             public string Title_Link { get; set; } = string.Empty;
             public string Text { get; set; } = string.Empty;
         }
+
+        public class SlackChannel
+        {
+            public string name = string.Empty;
+            public string desc = string.Empty;
+            public string id = string.Empty;
+        }
+
+        static List<SlackChannel> ListedChannels()
+        {
+            var channels = new List<SlackChannel>();
+
+            var xmlDoc = new XmlDocument();
+            xmlDoc.Load(@"SlackToken.xml");
+            var xmlToken = xmlDoc.SelectNodes("root/slack/channels/channel");
+            foreach(XmlNode channel in xmlToken)
+            {
+                var ch = new SlackChannel();
+                ch.name = channel.SelectSingleNode("name").InnerText;
+                ch.desc = channel.SelectSingleNode("desc").InnerText;
+                ch.id = channel.SelectSingleNode("id").InnerText;
+
+                channels.Add(ch);
+            }
+
+            return channels;
+        }
         static void Main(string[] args)
         {
-            Process[] aivoiceProcess = Process.GetProcessesByName("AIVoiceEditor");
-            if (aivoiceProcess.Length == 0)
+            List<Process> aivoiceProcess = Process.GetProcessesByName("AIVoiceEditor").ToList();
+            if (aivoiceProcess.Count == 0)
             {
-                Console.WriteLine("AIVoiceEditor.exe is not runnning. Exit");
-                return;
+                Console.WriteLine("AIVoiceEditor.exe is not runnning. Try to start.");
+                Process p = Process.Start(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + "\\AI\\AIVoice\\AIVoiceEditor\\AIVoiceEditor.exe");
+                Console.WriteLine("Start process, wait 10 sec for complete to start...");
+                Thread.Sleep(10 * 1000);
+                if(p == null || p.HasExited)
+                {
+                    Console.WriteLine("Failed to start process. Aborted");
+                    return;
+                }
+                aivoiceProcess.Add(p);
             }
             Process yukarisan = aivoiceProcess[0];
 
@@ -247,77 +282,91 @@ namespace Yukarisan
         {
             WindowsAppFriend app = new WindowsAppFriend(proc);
 
+            var channelList = ListedChannels();
             const string baseUrl = "https://slack.com/api";
-            const string RSS_VEHICLE = "CCGBY78KA";
-
             var slackClient = new SlackAPIHttpClient(baseUrl);
-            var responseBody = slackClient.GetChannelHistory(RSS_VEHICLE);
             var translate = new GoogleCloudTranslationClient();
 
-            string regexLink = @"<(?<URL>https?.*?)\|(?<Title>.*?)>";
-            Regex regex = new Regex(string.Format(@"^{0}(?<Text>.*)", regexLink), RegexOptions.Singleline);
-
-            AutomationElement elem = AutomationElement.FromHandle(proc.MainWindowHandle);
-
-            var messageObjects = JsonConvert.DeserializeObject<Messages>(responseBody);           
-            foreach (var messageObject in messageObjects.messages)
+            foreach (var channel in channelList)
             {
-                Console.WriteLine(messageObject.UserName);
+                Console.WriteLine(channel.name + ":" + channel.desc);
+                var responseBody = slackClient.GetChannelHistory(channel.id);
 
-                var targetText = messageObject.Text.Replace("\r", "").Replace("\n", "");
-                var textMatch = regex.Match(targetText);
-                if (textMatch.Success)
+                string regexLink = @"<(?<URL>https?.*?)\|(?<Title>.*?)>";
+                Regex regex = new Regex(string.Format(@"^{0}(?<Text>.*)", regexLink), RegexOptions.Singleline);
+
+                AutomationElement elem = AutomationElement.FromHandle(proc.MainWindowHandle);
+
+                var messageObjects = JsonConvert.DeserializeObject<Messages>(responseBody);
+                foreach (var messageObject in messageObjects.messages)
                 {
-                    string url = textMatch.Groups["URL"].Value.ToString();
-                    string title = textMatch.Groups["Title"].Value.ToString();
-                    string text = textMatch.Groups["Text"].Value.ToString();
-                    text = Regex.Replace(text, regexLink, "");
+                    Console.WriteLine(messageObject.UserName);
 
-                    if (text == String.Empty)
+                    var targetText = messageObject.Text.Replace("\r", "").Replace("\n", "");
+                    var textMatch = regex.Match(targetText);
+                    if (textMatch.Success)
                     {
-                        text = messageObject.Attachments.FirstOrDefault().Text;
+                        string url = textMatch.Groups["URL"].Value.ToString();
+                        string title = textMatch.Groups["Title"].Value.ToString();
+                        string text = textMatch.Groups["Text"].Value.ToString();
+                        text = Regex.Replace(text, regexLink, "");
+
+                        if (text == String.Empty)
+                        {
+                            text = messageObject.Attachments.FirstOrDefault().Text;
+                        }
+
+                        foreach(string d in new string[] {"…", "..." })
+                        {
+                            int dot = text.LastIndexOf(d);
+                            if (dot != -1)
+                            {
+                                text = text.Remove(dot);
+                            }
+                        }
+
+                        Console.WriteLine(title);
+                        Console.WriteLine(url);
+                        Console.WriteLine(text);
+
+                        foreach (var v in new Dictionary<string, string> { { "title", title }, { "content", text } })
+                        {
+                            string str = v.Value;
+                            if (isEnglish(v.Value))
+                            {
+                                var translated = translate.GetTranslation(v.Value);
+                                str = translated;
+                            }
+                            if (v.Key == "title")
+                            {
+                                str = "タイトル: " + str;
+                            }
+                            Program.FromGUI(app, str);
+
+                            var status = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
+                            if (status == null)
+                            {
+                                Console.WriteLine("Could not detect status bar text. Sleep 10 sec.");
+                                Thread.Sleep(10000);
+                                continue;
+                            }
+
+                            uint count = 0;
+                            char[] bars = { '/', '-', '\\', '|' };
+                            while (!status.Current.Name.Equals("テキストの読み上げは完了しました。"))
+                            {
+                                Console.CursorLeft = 0;
+                                Console.Write("Now Yukarisan reading " + bars[count % 4]);
+                                Thread.Sleep(100);
+                                count++;
+                            }
+                        }
+
                     }
-
-                    Console.WriteLine(title);
-                    Console.WriteLine(url);
-                    Console.WriteLine(text);
-
-                    foreach(var v in new Dictionary<string, string> { {"title", title }, { "content", text } })
-                    {
-                        string str = v.Value;
-                        if (isEnglish(v.Value))
-                        {
-                            var translated = translate.GetTranslation(v.Value);
-                            str = translated;
-                        }
-                        if (v.Key == "title")
-                        {
-                            str = "タイトル: " + str;
-                        }
-                        Program.FromGUI(app, str);
-
-                        var status = elem.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
-                        if (status == null)
-                        {
-                            Console.WriteLine("Could not detect status bar text. Sleep 10 sec.");
-                            Thread.Sleep(10000);
-                            continue;
-                        }
-
-                        uint count = 0;
-                        char[] bars = { '/', '-', '\\', '|' };
-                        while (!status.Current.Name.Equals("テキストの読み上げは完了しました。"))
-                        {
-                            Console.CursorLeft = 0;
-                            Console.Write("Now Yukarisan reading " + bars[count % 4]);
-                            Thread.Sleep(100);
-                            count++;
-                        }
-                    }
-
+                    Console.WriteLine("\n+++++++++++++");
                 }
-                Console.WriteLine("\n+++++++++++++");
-            }
+
+            }            
         }
 
         static void FromGUI(WindowsAppFriend app, string text)
