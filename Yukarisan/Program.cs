@@ -150,6 +150,9 @@ namespace Yukarisan
                     Console.WriteLine(url);
                     Console.WriteLine(text);
 
+                    // Remove surrogate pair because A.I.VOICE not support surrogate pair character (like a emoji)
+                    text = Regex.Replace(text, @"\p{IsHighSurrogates}\p{IsLowSurrogates}", "");
+
                     foreach (var v in new Dictionary<string, string> { { "title", title }, { "content", text } })
                     {
                         string str = v.Value;
