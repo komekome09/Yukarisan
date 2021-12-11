@@ -24,8 +24,4 @@
     <Reference Include="UIAutomationTypes" />
   </ItemGroup>
 
-  <Target Name="PostBuild" AfterTargets="PostBuildEvent">
-    <Exec Command="xcopy &quot;$(ProjectDir)\SlackToken.xml&quot; $(TargetDir) /Y" />
-  </Target>
-
 </Project>
