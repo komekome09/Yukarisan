@@ -67,6 +67,7 @@ namespace Yukarisan
         private GoogleCloudTranslationClient translateClient;
         private WindowsAppFriend appFriend;
         private AutomationElement autoElement;
+        private Process voiceProcess;
         private readonly string baseUrl = "https://slack.com/api";
         private readonly string regexLink = @"<(?<URL>https?.*?)\|(?<Title>.*?)>";
 
@@ -74,8 +75,9 @@ namespace Yukarisan
         {
             slackClient = new SlackAPIHttpClient(baseUrl);
             translateClient = new GoogleCloudTranslationClient();
-            appFriend = new WindowsAppFriend(proc);
-            autoElement = AutomationElement.FromHandle(proc.MainWindowHandle);
+            voiceProcess = proc;
+            appFriend = new WindowsAppFriend(voiceProcess);
+            autoElement = AutomationElement.FromHandle(voiceProcess.MainWindowHandle);
         }
 
         public void ReadRssMessageViaSlack()
@@ -159,13 +161,9 @@ namespace Yukarisan
         {
             FromGUI(appFriend, str);
 
-            var status = autoElement.FindFirst(TreeScope.Element | TreeScope.Descendants, new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
-            if (status == null)
-            {
-                Console.WriteLine("Could not detect status bar text. Sleep 10 sec.");
-                Thread.Sleep(10000);
-                return;
-            }
+            AutomationElement? status = autoElement.FindFirst(
+                TreeScope.Element | TreeScope.Descendants, 
+                new PropertyCondition(AutomationElement.ClassNameProperty, "StatusBarItem"));
 
             uint count = 0;
             char[] bars = { '/', '-', '\\', '|' };
@@ -182,16 +180,16 @@ namespace Yukarisan
         private void FromGUI(WindowsAppFriend app, string text)
         {
             var topLevel = app.GetTopLevelWindows();
-            var editview = topLevel.Single().GetFromTypeFullName("AI.Talk.Editor.TextEditView");
+            var editview = topLevel.First().GetFromTypeFullName("AI.Talk.Editor.TextEditView").FirstOrDefault();
 
             // Detect TextBox and edit text.
-            var textbox = editview.Single().LogicalTree().ByType<System.Windows.Controls.TextBox>();
+            var textbox = editview.LogicalTree().ByType<System.Windows.Controls.TextBox>();
             var talkTextBox = new WPFTextBox(textbox.Single());
             talkTextBox.EmulateChangeText(text);
 
             // Detect "Play" button and emulate click.
             // NOTE: In detection, below code suppose first button element is "Play" button. 
-            var button = editview.Single().VisualTree().ByType<System.Windows.Controls.Button>();
+            var button = editview.VisualTree().ByType<System.Windows.Controls.Button>();
             var talkPlayButton = new WPFButtonBase(button.First());
             talkPlayButton.EmulateClick();
         }
@@ -205,14 +203,20 @@ namespace Yukarisan
             {
                 Console.WriteLine("AIVoiceEditor.exe is not runnning. Try to start.");
                 Process p = Process.Start(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles) + "\\AI\\AIVoice\\AIVoiceEditor\\AIVoiceEditor.exe");
-                Console.WriteLine("Start process, wait 10 sec for complete to start...");
-                Thread.Sleep(10 * 1000);
+                Console.WriteLine("Start process.");
                 if (p == null || p.HasExited)
                 {
                     Console.WriteLine("Failed to start process. Aborted");
                     return;
                 }
-                aivoiceProcesses.Add(p);
+
+                string windowTitle = string.Empty;
+                do
+                {
+                    Thread.Sleep(100);
+                    aivoiceProcesses = Process.GetProcessesByName("AIVoiceEditor").ToList();
+                    windowTitle = aivoiceProcesses[0].MainWindowTitle;
+                } while(windowTitle != "A.I.VOICE Editor - (新規プロジェクト)");
             }
             Process aivoiceProcess = aivoiceProcesses[0];
 
