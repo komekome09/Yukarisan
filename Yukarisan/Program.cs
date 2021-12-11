@@ -18,6 +18,7 @@ namespace Yukarisan
         {
             public string UserName { get; set; } = string.Empty;
             public string Text { get; set; } = string.Empty;
+            public string Ts {  get; set; } = string.Empty ;
             public List<Attachment> Attachments { get; set; } = new List<Attachment>();
 
             [Serializable]
@@ -37,6 +38,7 @@ namespace Yukarisan
             public string name = string.Empty;
             public string desc = string.Empty;
             public string id = string.Empty;
+            public string ts = string.Empty;
         }
 
         private List<SlackChannelInXml> ListedChannels()
@@ -52,11 +54,27 @@ namespace Yukarisan
                 ch.name = channel.SelectSingleNode("name").InnerText;
                 ch.desc = channel.SelectSingleNode("desc").InnerText;
                 ch.id = channel.SelectSingleNode("id").InnerText;
+                ch.ts = channel.SelectSingleNode("lastts").InnerText;
 
                 channels.Add(ch);
             }
 
             return channels;
+        }
+        private void UpdateChannelLastTs(SlackChannelInXml ch)
+        {
+            if (string.IsNullOrEmpty(ch.ts)) { return; }
+
+            var xmlDoc = new XmlDocument();
+            xmlDoc.Load(@"SlackToken.xml");
+            var xmlToken = xmlDoc.SelectNodes("root/slack/channels/channel");
+            foreach(XmlNode channel in xmlToken)
+            {
+                if(channel.SelectSingleNode("name").InnerText != ch.name) { continue; }
+                channel.SelectSingleNode("lastts").InnerText = ch.ts;
+            }
+
+            xmlDoc.Save(@"SlackToken.xml");
         }
         private  bool isEnglish(string text)
         {
@@ -88,7 +106,7 @@ namespace Yukarisan
 
             foreach (var channel in channelList)
             {
-                var responseBody = slackClient.GetChannelHistory(channel.id);
+                var responseBody = slackClient.GetChannelHistory(channel.id, channel.ts);
                 var messageObjects = JsonConvert.DeserializeObject<SlackChannelMessages>(responseBody);
                 if(messageObjects == null)
                 {
@@ -98,11 +116,6 @@ namespace Yukarisan
                 Console.WriteLine(channel.name + ":" + channel.desc);
                 TalkAndWait(channel.desc + "についての記事を読むよ。全部で" + messageObjects.Messages.Count + "記事あるよ。");
                 var messageList = messageObjects.Messages;
-                if(messageList.Count > 10)
-                {
-                    TalkAndWait("記事が多いから最新 10記事を読むね");
-                    messageList = messageList.GetRange(0, 10);
-                }
                 foreach (var messageObject in messageList)
                 {
                     Console.WriteLine(messageObject.UserName);
@@ -123,6 +136,7 @@ namespace Yukarisan
                         text = messageObject.Attachments.FirstOrDefault().Text;
                     }
 
+                    // Remove after "...". These string is oftern unrelated string for news feed.
                     foreach (string d in new string[] { "…", "..." })
                     {
                         int dot = text.LastIndexOf(d);
@@ -154,6 +168,12 @@ namespace Yukarisan
                 }
 
                 TalkAndWait("このチャンネルの記事は全て読み終えたので次のチャンネルに行くね");
+                if (messageList.Count > 0)
+                {
+                    var last = messageList.First();
+                    channel.ts = last.Ts.ToString();
+                    UpdateChannelLastTs(channel);
+                }
             }
         }
 

@@ -81,9 +81,17 @@ namespace Yukarisan
             return resBody;
         }
 
-        public string GetChannelHistory(string channelId)
+        public string GetChannelHistory(string channelId, string timestamp)
         {
+            if (string.IsNullOrEmpty(channelId))
+            {
+                return string.Empty;
+            }
             string requestEndPoint = this.baseUrl + "/conversations.history?channel=" + channelId;
+            if (!string.IsNullOrEmpty(timestamp))
+            {
+                requestEndPoint += "&oldest=" + timestamp;
+            }
 
             var response = GetMethod(requestEndPoint);
             if (response == null)
